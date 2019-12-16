@@ -2,19 +2,17 @@ use std::borrow::BorrowMut;
 use std::fmt::{Display, Error, Formatter};
 
 use crate::sudokutwo::entry_num::{EntryNum, EntryNumThings};
-use crate::sudokutwo::entry_num::ALL;
 use crate::sudokutwo::sudoku_api::SudokuApi;
 
 pub mod sudoku_api;
 mod entry_num;
 mod sudoku_essentials;
-mod sudoku_get_indices;
 
-
-pub struct Sudoku {
-    data: [EntryNum; 81],
+enum EntityType {
+    Box,
+    Col,
+    Row,
 }
-
 
 impl Sudoku {
     fn get_sets(sets: Vec<EntryNum>, all_pots: EntryNum, data: &[EntryNum; 81]) -> EntryNum {
@@ -117,13 +115,14 @@ impl Sudoku {
             let block_row = i / 3;
             let block_col = i % 3;
             let block_nums = Sudoku::get_block_indices(block_row, block_col);
-            self.eliminate_omission(i, row_nums);
+            self.eliminate_omission(i, row_nums, EntityType::Row);
+            self.eliminate_omission(i, col_nums, EntityType::Col);
+            self.eliminate_omission(i, block_nums, EntityType::Box);
         }
         0
     }
 
-
-    fn eliminate_omission(&mut self, row: usize, indices: Vec<usize>) -> u32 {
+    fn eliminate_omission(&mut self, rcb: usize, indices: Vec<usize>, t: EntityType) -> u32 {
         let ens = indices.iter().map(|x| self.data[*x]).collect::<Vec<_>>();
         // for each number, check where it is possible
         let mut res = 0;
@@ -135,23 +134,60 @@ impl Sudoku {
                 .collect::<Vec<_>>();
 
             match pos_locs.len() {
+                // fill in an option when it's the only possible thing in the Row|Column|Block)
                 1 if !pos_locs[0].1.is_fixed() => self.data.borrow_mut()[indices[pos_locs[0].0]] = mask,
-                2 | 3 => {}
-                _ => ()
-            }
-            if pos_locs.len() <= 3 { // possible to fit in a box
-                // todo check that they are all in the same box
-                // simple really; have to be contiguous and
-                pos_locs.sort();
-                let mut indices = pos_locs.iter().map(|(index, value)| indices[*index]).collect::<Vec<_>>();
-                // check if we're a block
-                let block_locs = pos_locs.iter().map(|(i, v)| *i).collect::<Vec<_>>();
-                if block_locs == Sudoku::BLOCK_ONE || block_locs == Sudoku::BLOCK_TWO || block_locs == Sudoku::BLOCK_THREE {
-                    res += self.remove_other_locs(row, mask, indices, block_locs);
+                2 | 3 => { // we need to check whether these are in the same row|column|bloxk
+                    // so we can eliminate the rest
+                    let actual_indices: Vec<usize> = pos_locs.iter()
+                        .map(|(i, _v)| indices[*i]).collect::<Vec<_>>();
+                    let first_index = actual_indices[0];
+                    let to_remove: Vec<usize> = match t {
+                        // we get the indices from which we would want to remove (or none)
+                        EntityType::Row if Sudoku::in_same_RCB(&actual_indices, EntityType::Box) =>
+                            Sudoku::get_block_indices_by_cell_index(first_index),
+                        EntityType::Box if Sudoku::in_same_RCB(&actual_indices, EntityType::Row)
+                        => Sudoku::get_row_indices(first_index),
+                        EntityType::Box if Sudoku::in_same_RCB(&actual_indices, EntityType::Col) =>
+                            Sudoku::get_col_indices(first_index),
+                        EntityType::Col if Sudoku::in_same_RCB(&actual_indices, EntityType::Box) =>
+                            Sudoku::get_block_indices_by_cell_index(first_index),
+                        _ => vec!()
+                    };
+                    if to_remove.is_empty() { // continue on none
+                        continue;
+                    }
+//                    println!("Removing {:?} at indices {:?}", mask.get_pos(), to_remove);
+                    let removal: u32 = to_remove.iter()
+                        .filter(|x| !actual_indices.contains(*x))
+                        .map(|x| Sudoku::remove_possibilities(self.data.borrow_mut(), *x, mask))
+                        .sum();
+                    res += removal;
                 }
+                _ => () // nothing to do in other cases, can't eliminate anything
             }
+//            if pos_locs.len() <= 3 { // possible to fit in a box
+//                // todo check that they are all in the same box
+//                // simple really; have to be contiguous and
+//                pos_locs.sort();
+//                let mut indices = pos_locs.iter().map(|(index, value)| indices[*index]).collect::<Vec<_>>();
+//                // check if we're a block
+//                let block_locs = pos_locs.iter().map(|(i, v)| *i).collect::<Vec<_>>();
+//                if block_locs == Sudoku::BLOCK_ONE || block_locs == Sudoku::BLOCK_TWO || block_locs == Sudoku::BLOCK_THREE {
+//                    res += self.remove_other_locs(rcb, mask, indices, block_locs);
+//                }
+//            }
         }
         res
+    }
+
+    fn in_same_RCB(indices: &Vec<usize>, t: EntityType) -> bool {
+        let rcbs = match t {
+            EntityType::Row => indices.iter().map(|i| *i / 9).collect::<Vec<_>>(),
+            EntityType::Col => indices.iter().map(|i| *i % 9).collect::<Vec<_>>(),
+            EntityType::Box => indices.iter().map(|i| Sudoku::get_block_index(*i)).collect::<Vec<_>>()
+        };
+        let first = rcbs[0];
+        rcbs.iter().all(|x| *x == first)
     }
 
 
@@ -165,6 +201,14 @@ impl Sudoku {
             .map(|x| Sudoku::remove_possibilities(self.data.borrow_mut(), *x, mask)).sum();
         return removed;
     }
+}
+
+
+mod sudoku_get_indices;
+
+
+pub struct Sudoku {
+    data: [EntryNum; 81],
 }
 
 impl Display for Sudoku {
@@ -184,7 +228,7 @@ fn data_to_string(data: &[u16; 81]) -> String {
             let pots = n.get_pos();
             let addition = match pots.len() {
                 1 => format!("{}", pots[0]),
-                _ => format!("_"),
+                _ => format!("{:?}", pots),
             };
             s += &addition;
         }
@@ -245,6 +289,7 @@ mod testing {
                 }
                 assert_eq!(s.is_valid(), Ok(())); // even if not solved, it should be valid
                 if !s.is_solved() {
+                    println!("{}", s);
                     println!("{} went from {} unfixed to {} ({})", i, before_unfixed, s.count_unfixed(), before_unfixed - s.count_unfixed());
                 }
                 s
@@ -253,6 +298,31 @@ mod testing {
             .count();
         println!("Solved {} out of 50 -> {:.2}%", solved_count, 100 as f32 * solved_count as f32 / 50 as f32);
         println!("DONE ALL 50");
+        Ok(())
+    }
+
+    #[test]
+    fn solve_top_95() -> Result<(), Box<dyn Error>> {
+        let file = File::open("resources/top-95.txt")?;
+        let reader = BufReader::new(file);
+        let solved_count = reader.lines().map(|l| l.unwrap()).map(Sudoku::new).map(|x| x.unwrap()).enumerate()
+            .map(|(i, mut s)| {
+                let before_unfixed = s.count_unfixed();
+                while s.solve_once() > 0 {
+                    if let Err(msg) = s.is_valid() {
+                        panic!(msg);
+                    }
+                }
+                assert_eq!(s.is_valid(), Ok(())); // even if not solved, it should be valid
+                if !s.is_solved() {
+                    println!("{} went from {} unfixed to {} ({})", i, before_unfixed, s.count_unfixed(), before_unfixed - s.count_unfixed());
+                }
+                s
+            })
+            .filter(Sudoku::is_solved)
+            .count();
+        println!("Solved {} out of 95 -> {:.2}%", solved_count, 100 as f32 * solved_count as f32 / 95 as f32);
+        println!("DONE ALL 95");
         Ok(())
     }
 

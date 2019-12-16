@@ -8,6 +8,12 @@ impl Sudoku {
         return Sudoku::get_block_indices(box_row, box_col);
     }
 
+    pub(crate) fn get_block_index(cell_index: usize) -> usize {
+        let box_col = (cell_index % 9) / 3;
+        let box_row = cell_index / 27;
+        box_row * 3 + box_col
+    }
+
     pub(crate) fn get_block_indices(block_row: usize, block_col: usize) -> Vec<usize> {
         (0..3).flat_map(
             |b_r| (0..3).map(|b_c| (block_row * 3 + b_r) * 9 + (block_col * 3) + b_c).collect::<Vec<_>>()).collect::<Vec<_>>()
